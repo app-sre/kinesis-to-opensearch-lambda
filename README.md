@@ -1,0 +1,1 @@
+# kinesis-to-opensearch-lambda
