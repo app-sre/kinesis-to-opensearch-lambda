@@ -50,7 +50,7 @@ def handler(event, context):
     count = 0
     if secret_name:
         secret = get_secret(secret_name)
-        auth = HTTPBasicAuth(secret[''],secret[''])
+        auth = HTTPBasicAuth(secret['master_user_name'],secret['master_user_password'])
     else:
         credentials = session.get_credentials()
         auth = AWS4Auth(credentials.access_key, credentials.secret_key, region, 'es', session_token=credentials.token)
