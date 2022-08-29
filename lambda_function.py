@@ -13,7 +13,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 region = os.environ["AWS_REGION"]
-host = os.environ["es_endpoint"]
+host = "https://" + os.environ["es_endpoint"]
 secret_name = os.environ["secret_name"]
 index = os.environ["index_prefix"] + str(date.today())
 type = "_doc"
@@ -58,7 +58,7 @@ def handler(event, context):
 
     for record in event["Records"]:
         # Kinesis data is base64-encoded, so decode here
-        message = base64.b64decode(record["kinesis"]["data"])
+        message = json.loads(base64.b64decode(record["kinesis"]["data"]))
         id = message["random_id"]
         message["@timestamp"] = message["datetime"]
         if not message["ip"]:
