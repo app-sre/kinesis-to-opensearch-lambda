@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 region = os.environ["AWS_REGION"]
 host = os.environ["es_endpoint"]
 secret_name = os.environ["secret_name"]
-index = os.environ["index_prefix"] + date.today()
+index = os.environ["index_prefix"] + str(date.today())
 type = "_doc"
 url = host + "/" + index + "/" + type + "/"
 headers = {"Content-Type": "application/json"}
