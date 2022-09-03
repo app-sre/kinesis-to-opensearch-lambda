@@ -6,7 +6,7 @@ import boto3
 import requests
 from requests.auth import HTTPBasicAuth
 from requests_aws4auth import AWS4Auth
-from datetime import date
+from datetime import datetime
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
@@ -15,9 +15,8 @@ logger.setLevel(logging.INFO)
 region = os.environ["AWS_REGION"]
 host = "https://" + os.environ["es_endpoint"]
 secret_name = os.environ["secret_name"]
-index = os.environ["index_prefix"] + str(date.today())
+index_prefix = os.environ["index_prefix"]
 type = "_doc"
-url = host + "/" + index + "/" + type + "/"
 headers = {"Content-Type": "application/json"}
 session = boto3.session.Session()
 
@@ -42,7 +41,6 @@ def get_secret(secret_name):
 
 
 def handler(event, context):
-    count = 0
     if secret_name:
         secret = get_secret(secret_name)
         auth = HTTPBasicAuth(secret["master_user_name"], secret["master_user_password"])
@@ -56,13 +54,20 @@ def handler(event, context):
             session_token=credentials.token,
         )
 
+    count = 0
     for record in event["Records"]:
         # Kinesis data is base64-encoded, so decode here
         message = json.loads(base64.b64decode(record["kinesis"]["data"]))
         id = message["random_id"]
-        message["@timestamp"] = message["datetime"]
+        message_time = message["datetime"]
+        message["@timestamp"] = message_time
         if not message["ip"]:
             message.pop["ip"]
-        r = requests.put(url + id, auth=auth, json=message, headers=headers)
-        count += 1
-    return "Processed " + str(count) + " items."
+        message_date = str(datetime.fromisoformat(message_time).date())
+        index = index_prefix + message_date
+        url = f"{host}/{index}/{type}/{id}"
+        r = requests.put(url, auth=auth, json=message, headers=headers)
+        if r.status_code == 200:
+            count += 1
+    total = len(event["Records"])
+    print(f"Success processed {count}/{total} items.")
