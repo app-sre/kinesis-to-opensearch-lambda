@@ -54,7 +54,7 @@ def handler(event, context):
             session_token=credentials.token,
         )
 
-    count = 0
+    fail_count = 0
     for record in event["Records"]:
         # Kinesis data is base64-encoded, so decode here
         message = json.loads(base64.b64decode(record["kinesis"]["data"]))
@@ -66,8 +66,12 @@ def handler(event, context):
         message_date = str(datetime.fromisoformat(message_time).date())
         index = index_prefix + message_date
         url = f"{host}/{index}/{type}/{id}"
-        r = requests.put(url, auth=auth, json=message, headers=headers)
-        if r.status_code == 200:
-            count += 1
+
+        try:
+            r = requests.put(url, auth=auth, json=message, headers=headers, timeout=30)
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            fail_count += 1
+            print(e.response.text)
     total = len(event["Records"])
-    print(f"Success processed {count}/{total} items.")
+    print(f"Success processed {total-fail_count}/{total} items.")
