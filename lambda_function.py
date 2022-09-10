@@ -3,17 +3,15 @@ import logging
 import json
 import base64
 import boto3
-import requests
-from requests.auth import HTTPBasicAuth
-from requests_aws4auth import AWS4Auth
 from datetime import datetime
 from botocore.exceptions import ClientError
+from opensearchpy import OpenSearch, helpers, AWSV4SignerAuth
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 region = os.environ["AWS_REGION"]
-host = "https://" + os.environ["es_endpoint"]
+host = os.environ["es_endpoint"]
 secret_name = os.environ["secret_name"]
 index_prefix = os.environ["index_prefix"]
 type = "_doc"
@@ -43,18 +41,20 @@ def get_secret(secret_name):
 def handler(event, context):
     if secret_name:
         secret = get_secret(secret_name)
-        auth = HTTPBasicAuth(secret["master_user_name"], secret["master_user_password"])
+        auth = (secret["master_user_name"], secret["master_user_password"])
     else:
         credentials = session.get_credentials()
-        auth = AWS4Auth(
-            credentials.access_key,
-            credentials.secret_key,
-            region,
-            "es",
-            session_token=credentials.token,
-        )
+        auth = AWSV4SignerAuth(credentials, region)
 
-    fail_count = 0
+    client = OpenSearch(
+        hosts = [{'host': host, 'port': 443}],
+        http_auth = auth,
+        http_compress = True,
+        use_ssl = True,
+        verify_certs=True
+    )
+
+    actions = []
     for record in event["Records"]:
         # Kinesis data is base64-encoded, so decode here
         message = json.loads(base64.b64decode(record["kinesis"]["data"]))
@@ -65,13 +65,16 @@ def handler(event, context):
             message.pop["ip"]
         message_date = str(datetime.fromisoformat(message_time).date())
         index = index_prefix + message_date
-        url = f"{host}/{index}/{type}/{id}"
+        action = {
+            '_op_type': 'update',
+            '_index': index,
+            '_id': id,
+            'doc': message
+        }
+        actions.append(action)
 
-        try:
-            r = requests.put(url, auth=auth, json=message, headers=headers, timeout=30)
-            r.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            fail_count += 1
-            print(e.response.text)
+    success, errors = helpers.bulk(client,actions,max_retries=3)
+    if errors:
+        logger.error(errors)
     total = len(event["Records"])
-    print(f"Success processed {total-fail_count}/{total} items.")
+    print(f"Success processed {success}/{total} items.")
