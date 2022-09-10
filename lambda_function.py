@@ -68,9 +68,8 @@ def handler(event, context):
         action = {"_index": index, "_id": id, "_source": message}
         actions.append(action)
 
-    try:
-        helpers.bulk(client, actions, max_retries=3)
-    except helpers.errors.BulkIndexError as e:
-        logger.error(e)
+    success, errors = helpers.bulk(client, actions, max_retries=3, raise_on_error=False)
+    if errors:
+        logger.error(errors)
     total = len(event["Records"])
-    print(f"Success processed {total} items.")
+    print(f"Success processed {success}/{total} items.")
