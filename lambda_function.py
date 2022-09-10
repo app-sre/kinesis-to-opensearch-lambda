@@ -66,10 +66,9 @@ def handler(event, context):
         message_date = str(datetime.fromisoformat(message_time).date())
         index = index_prefix + message_date
         action = {
-            '_op_type': 'update',
             '_index': index,
             '_id': id,
-            'doc': message
+            '_source': message
         }
         actions.append(action)
 
