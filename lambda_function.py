@@ -47,11 +47,11 @@ def handler(event, context):
         auth = AWSV4SignerAuth(credentials, region)
 
     client = OpenSearch(
-        hosts = [{'host': host, 'port': 443}],
-        http_auth = auth,
-        http_compress = True,
-        use_ssl = True,
-        verify_certs=True
+        hosts=[{"host": host, "port": 443}],
+        http_auth=auth,
+        http_compress=True,
+        use_ssl=True,
+        verify_certs=True,
     )
 
     actions = []
@@ -65,15 +65,12 @@ def handler(event, context):
             message.pop["ip"]
         message_date = str(datetime.fromisoformat(message_time).date())
         index = index_prefix + message_date
-        action = {
-            '_index': index,
-            '_id': id,
-            '_source': message
-        }
+        action = {"_index": index, "_id": id, "_source": message}
         actions.append(action)
 
-    success, errors = helpers.bulk(client,actions,max_retries=3)
-    if errors:
-        logger.error(errors)
+    try:
+        helpers.bulk(client, actions, max_retries=3)
+    except helpers.errors.BulkIndexError as e:
+        logger.error(e)
     total = len(event["Records"])
-    print(f"Success processed {success}/{total} items.")
+    print(f"Success processed {total} items.")
