@@ -8,6 +8,7 @@ from requests.auth import HTTPBasicAuth
 from requests_aws4auth import AWS4Auth
 from datetime import datetime
 from botocore.exceptions import ClientError
+from multiprocessing import Process
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -40,6 +41,23 @@ def get_secret(secret_name):
     return json.loads(secret)
 
 
+def put_doc(auth, data):
+    message = json.loads(base64.b64decode(data))
+    id = message["random_id"]
+    message_time = message["datetime"]
+    message["@timestamp"] = message_time
+    if not message["ip"]:
+        message.pop["ip"]
+    message_date = str(datetime.fromisoformat(message_time).date())
+    index = index_prefix + message_date
+    url = f"{host}/{index}/{type}/{id}"
+    try:
+        r = requests.put(url, auth=auth, json=message, headers=headers, timeout=30)
+        r.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        logger.error(e.response.text)
+
+
 def handler(event, context):
     if secret_name:
         secret = get_secret(secret_name)
@@ -54,24 +72,20 @@ def handler(event, context):
             session_token=credentials.token,
         )
 
-    fail_count = 0
+    processes = []
     for record in event["Records"]:
-        # Kinesis data is base64-encoded, so decode here
-        message = json.loads(base64.b64decode(record["kinesis"]["data"]))
-        id = message["random_id"]
-        message_time = message["datetime"]
-        message["@timestamp"] = message_time
-        if not message["ip"]:
-            message.pop["ip"]
-        message_date = str(datetime.fromisoformat(message_time).date())
-        index = index_prefix + message_date
-        url = f"{host}/{index}/{type}/{id}"
+        p = Process(
+            target=put_doc,
+            args=(
+                auth,
+                record["kinesis"]["data"],
+            ),
+        )
+        processes.append(p)
+        p.start()
 
-        try:
-            r = requests.put(url, auth=auth, json=message, headers=headers, timeout=30)
-            r.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            fail_count += 1
-            print(e.response.text)
+    for process in processes:
+        process.join()
+
     total = len(event["Records"])
-    print(f"Success processed {total-fail_count}/{total} items.")
+    print(f"Processed {total} items.")
