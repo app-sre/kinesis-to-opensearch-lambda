@@ -61,8 +61,8 @@ def handler(event, context):
         id = message["random_id"]
         message_time = message["datetime"]
         message["@timestamp"] = message_time
-        if not message["ip"]:
-            message.pop["ip"]
+        if "ip" in message and not message["ip"]:
+            message.pop("ip")
         message_date = str(datetime.fromisoformat(message_time).date())
         index = index_prefix + message_date
         action = {"_index": index, "_id": id, "_source": message}
