@@ -19,11 +19,6 @@ type = "_doc"
 headers = {"Content-Type": "application/json"}
 session = boto3.session.Session()
 
-# splunk HEC configuration
-splunk_hec_url = os.environ["splunk_hec_url"]
-splunk_hec_token = os.environ["splunk_hec_token"]
-splunk_index = os.environ["splunk_index"]
-
 
 def get_secret(secret_name):
 
@@ -81,6 +76,11 @@ def elasticsearch_handler(event, context):
 
 
 def splunk_handler(event, context):
+    secret = get_secret('splunk-quayio-audit-log')
+    # splunk HEC configuration
+    splunk_hec_url = secret["splunk_hec_url"]
+    splunk_hec_token = secret["splunk_hec_token"]
+    splunk_index = secret["splunk_index"]
     events = []
 
     for record in event["Records"]:
