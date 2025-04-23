@@ -1,1 +1,2 @@
 opensearch-py
+requests

@@ -12,19 +12,16 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 region = os.environ["AWS_REGION"]
-es_host = os.environ["es_endpoint"]
-secret_name = os.environ["secret_name"]
-es_index_prefix = os.environ["index_prefix"]
 type = "_doc"
 headers = {"Content-Type": "application/json"}
 session = boto3.session.Session()
 
 
-def get_secret(secret_name):
+def get_secret(aws_secret_value):
 
     client = session.client(service_name="secretsmanager", region_name=region)
     try:
-        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+        get_secret_value_response = client.get_secret_value(SecretId=aws_secret_value)
     except ClientError as e:
         logger.error(e)
         raise e
@@ -38,9 +35,24 @@ def get_secret(secret_name):
 
     return json.loads(secret)
 
+def process_kinesis_record(record):
+    # Kinesis data is base64-encoded, so decode here
+    message = json.loads(base64.b64decode(record["kinesis"]["data"]))
+    message_time = message["datetime"]
+    message["@timestamp"] = message_time
+    if "ip" in message and not message["ip"]:
+        message.pop("ip")
+    message_date = str(datetime.fromisoformat(message_time).date())
+    return message, message_date
+
+
 def elasticsearch_handler(event, context):
-    if secret_name:
-        secret = get_secret(secret_name)
+    es_host = os.environ["es_endpoint"]
+    elastic_search_secret = os.environ["secret_name"]
+    es_index_prefix = os.environ["index_prefix"]
+
+    if elastic_search_secret:
+        secret = get_secret(elastic_search_secret)
         auth = (secret["master_user_name"], secret["master_user_password"])
     else:
         credentials = session.get_credentials()
@@ -56,16 +68,9 @@ def elasticsearch_handler(event, context):
 
     actions = []
     for record in event["Records"]:
-        # Kinesis data is base64-encoded, so decode here
-        message = json.loads(base64.b64decode(record["kinesis"]["data"]))
-        id = message["random_id"]
-        message_time = message["datetime"]
-        message["@timestamp"] = message_time
-        if "ip" in message and not message["ip"]:
-            message.pop("ip")
-        message_date = str(datetime.fromisoformat(message_time).date())
+        message, message_date = process_kinesis_record(record)
         index = es_index_prefix + message_date
-        action = {"_index": index, "_id": id, "_source": message}
+        action = {"_index": index, "_id":  message["random_id"], "_source": message}
         actions.append(action)
 
     success, errors = helpers.bulk(client, actions, max_retries=3, raise_on_error=False)
@@ -84,28 +89,16 @@ def splunk_handler(event, context):
     events = []
 
     for record in event["Records"]:
-        try:
-            # Kinesis data is base64-encoded, so decode here
-            message = json.loads(base64.b64decode(record["kinesis"]["data"]))
-            id = message["random_id"]
-            message_time = message["datetime"]
-            message["@timestamp"] = message_time
-            if "ip" in message and not message["ip"]:
-                message.pop("ip")
-            message_date = str(datetime.fromisoformat(message_time).date())
-
-            # Create splunk payload
-            event = {
-                "event": message,
-                "sourcetype": "json",
-                "index": splunk_index + message_date,
-                "time": message_time,
-                 "_id": id,
-            }
-            events.append(event)
-        except Exception as e:
-            logger.error(f"Failed to process record for splunk: {str(e)}")
-            continue
+        message, message_date = process_kinesis_record(record)
+        # Create splunk payload
+        event = {
+            "event": message,
+            "sourcetype": "json",
+            "index": splunk_index + message_date,
+            "time": message["datetime"],
+            "_id": message["random_id"],
+        }
+        events.append(event)
 
     success_count = 0
     errors = []
