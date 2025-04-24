@@ -35,7 +35,7 @@ def get_secret(aws_secret_value):
 
     return json.loads(secret)
 
-def process_kinesis_record(record):
+def _process_kinesis_record(record):
     # Kinesis data is base64-encoded, so decode here
     message = json.loads(base64.b64decode(record["kinesis"]["data"]))
     message_time = message["datetime"]
@@ -68,7 +68,7 @@ def elasticsearch_handler(event, context):
 
     actions = []
     for record in event["Records"]:
-        message, message_date = process_kinesis_record(record)
+        message, message_date = _process_kinesis_record(record)
         index = es_index_prefix + message_date
         action = {"_index": index, "_id":  message["random_id"], "_source": message}
         actions.append(action)
@@ -80,16 +80,35 @@ def elasticsearch_handler(event, context):
     print(f"Successfully processed {success}/{total} items for opensearch")
 
 
+def _send_to_splunk(events, errors, splunk_hec_url, splunk_hec_token):
+    try:
+        response = requests.post(
+            splunk_hec_url,
+            headers={'Authorization': f'Splunk {splunk_hec_token}'},
+            json=events,
+            timeout=30
+        )
+        response.raise_for_status()
+        return len(events)
+    except Exception as e:
+        errors.append(str(e))
+        return 0
+
 def splunk_handler(event, context):
-    secret = get_secret('splunk-quayio-audit-log')
+    secret = get_secret(os.environ["secret_name"])
     # splunk HEC configuration
     splunk_hec_url = secret["splunk_hec_url"]
     splunk_hec_token = secret["splunk_hec_token"]
     splunk_index = secret["splunk_index"]
+    success_count = 0
+    errors = []
     events = []
+    max_batch_size = 500
 
     for record in event["Records"]:
-        message, message_date = process_kinesis_record(record)
+        message, message_date = _process_kinesis_record(record)
+        if message is None:
+            continue
         # Create splunk payload
         event = {
             "event": message,
@@ -99,20 +118,15 @@ def splunk_handler(event, context):
             "_id": message["random_id"],
         }
         events.append(event)
-
-    success_count = 0
-    errors = []
-
-    try:
-        response = requests.post(
-            splunk_hec_url,
-            headers={'Authorization': f'Splunk {splunk_hec_token}'},
-            json=events,
-            timeout=30
-        )
-        response.raise_for_status()
-    except Exception as e:
-        errors.append(str(e))
+        # if the number of events reaches the max batch size, send them to Splunk
+        if len(events) >= max_batch_size:
+            sent = _send_to_splunk(events, errors, splunk_hec_url, splunk_hec_token)
+            success_count += sent
+            events = []
+    # Send remaining events
+    if events:
+        sent = _send_to_splunk(events, errors, splunk_hec_url, splunk_hec_token)
+        success_count += sent
 
     if errors:
         logger.error(errors)
