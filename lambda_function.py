@@ -111,7 +111,7 @@ def splunk_handler(processed_records, context):
         event = {
             "event": message,
             "sourcetype": "json",
-            "index": splunk_index + str(datetime.fromisoformat(message["datetime"]).date()),
+            "index": splunk_index,
             "time": message["datetime"],
             "_id": message["random_id"],
         }
