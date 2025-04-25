@@ -35,18 +35,17 @@ def get_secret(aws_secret_value):
 
     return json.loads(secret)
 
-def process_kinesis_record(record):
+def _process_kinesis_record(record):
     # Kinesis data is base64-encoded, so decode here
     message = json.loads(base64.b64decode(record["kinesis"]["data"]))
     message_time = message["datetime"]
     message["@timestamp"] = message_time
     if "ip" in message and not message["ip"]:
         message.pop("ip")
-    message_date = str(datetime.fromisoformat(message_time).date())
-    return message, message_date
+    return message
 
 
-def elasticsearch_handler(event, context):
+def elasticsearch_handler(processed_records, context):
     es_host = os.environ["es_endpoint"]
     elastic_search_secret = os.environ["secret_name"]
     es_index_prefix = os.environ["index_prefix"]
@@ -67,42 +66,21 @@ def elasticsearch_handler(event, context):
     )
 
     actions = []
-    for record in event["Records"]:
-        message, message_date = process_kinesis_record(record)
-        index = es_index_prefix + message_date
+    for message in processed_records:
+        if message is None:
+            continue
+        index = es_index_prefix + str(datetime.fromisoformat(message["datetime"]).date())
         action = {"_index": index, "_id":  message["random_id"], "_source": message}
         actions.append(action)
 
     success, errors = helpers.bulk(client, actions, max_retries=3, raise_on_error=False)
     if errors:
         logger.error(errors)
-    total = len(event["Records"])
+    total = len(processed_records)
     print(f"Successfully processed {success}/{total} items for opensearch")
 
 
-def splunk_handler(event, context):
-    secret = get_secret('splunk-quayio-audit-log')
-    # splunk HEC configuration
-    splunk_hec_url = secret["splunk_hec_url"]
-    splunk_hec_token = secret["splunk_hec_token"]
-    splunk_index = secret["splunk_index"]
-    events = []
-
-    for record in event["Records"]:
-        message, message_date = process_kinesis_record(record)
-        # Create splunk payload
-        event = {
-            "event": message,
-            "sourcetype": "json",
-            "index": splunk_index + message_date,
-            "time": message["datetime"],
-            "_id": message["random_id"],
-        }
-        events.append(event)
-
-    success_count = 0
-    errors = []
-
+def _send_to_splunk(events, splunk_hec_url, splunk_hec_token):
     try:
         response = requests.post(
             splunk_hec_url,
@@ -111,14 +89,47 @@ def splunk_handler(event, context):
             timeout=30
         )
         response.raise_for_status()
+        return len(events)
     except Exception as e:
-        errors.append(str(e))
+        logger.error(str(e))
+        return 0
 
-    if errors:
-        logger.error(errors)
-    total = len(event["Records"])
+def splunk_handler(processed_records, context):
+    secret = get_secret(os.environ["secret_name"])
+    # splunk HEC configuration
+    splunk_hec_url = secret["splunk_hec_url"]
+    splunk_hec_token = secret["splunk_hec_token"]
+    splunk_index = secret["splunk_index"]
+    success_count = 0
+    events = []
+    max_batch_size = 500
+
+    for message in processed_records:
+        if message is None:
+            continue
+        # Create splunk payload
+        event = {
+            "event": message,
+            "sourcetype": "json",
+            "index": splunk_index + str(datetime.fromisoformat(message["datetime"]).date()),
+            "time": message["datetime"],
+            "_id": message["random_id"],
+        }
+        events.append(event)
+        # if the number of events reaches the max batch size, send them to Splunk
+        if len(events) >= max_batch_size:
+            sent = _send_to_splunk(events, splunk_hec_url, splunk_hec_token)
+            success_count += sent
+            events = []
+    # Send remaining events
+    if events:
+        sent = _send_to_splunk(events, splunk_hec_url, splunk_hec_token)
+        success_count += sent
+
+    total = len(processed_records)
     print(f"Successfully processed {success_count}/{total} items to Splunk")
 
 def handler(event, context):
-    elasticsearch_handler(event,context)
-    splunk_handler(event,context)
+    processed_records = [_process_kinesis_record(r) for r in event["Records"]]
+    elasticsearch_handler(processed_records,context)
+    splunk_handler(processed_records,context)
