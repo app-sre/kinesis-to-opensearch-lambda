@@ -4,9 +4,6 @@ import json
 import base64
 import boto3
 import requests
-import socket
-import urllib3
-from urllib.parse import urlparse
 from datetime import datetime
 from botocore.exceptions import ClientError
 from opensearchpy import OpenSearch, helpers, AWSV4SignerAuth
@@ -84,21 +81,6 @@ def elasticsearch_handler(processed_records, context):
 
 
 def _send_to_splunk(events, splunk_hec_url, splunk_hec_token):
-    parsed_url = urlparse(splunk_hec_url)
-    hostname = parsed_url.hostname
-    try:
-        # Test DNS
-        ip = socket.gethostbyname(hostname)
-        print(f"DNS resolved to: {ip}")
-
-        # Test connection
-        http = urllib3.PoolManager()
-        response = http.request('GET', splunk_hec_url)
-        print(f"Success! Status: {response.status}")
-
-    except Exception as e:
-        logger.error(f"Splunk connection failed: {str(e)}")
-
     try:
         response = requests.post(
             splunk_hec_url,
