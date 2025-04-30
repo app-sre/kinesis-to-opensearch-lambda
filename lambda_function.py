@@ -112,8 +112,6 @@ def splunk_handler(processed_records, context):
             "event": message,
             "sourcetype": "json",
             "index": splunk_index,
-            "time": message["datetime"],
-            "_id": message["random_id"],
         }
         events.append(event)
         # if the number of events reaches the max batch size, send them to Splunk
