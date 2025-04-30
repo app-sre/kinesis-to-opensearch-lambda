@@ -104,7 +104,7 @@ def _send_to_splunk(events, splunk_hec_url, splunk_hec_token):
             splunk_hec_url,
             headers={'Authorization': f'Splunk {splunk_hec_token}'},
             json=events,
-            timeout=30
+            timeout=12
         )
         response.raise_for_status()
         return len(events)
