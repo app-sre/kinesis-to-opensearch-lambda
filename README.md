@@ -1,10 +1,10 @@
 # kinesis-to-opensearch-lambda
 
-Holding repository for kinesis-to-opensearch lambda function 
+Holding repository for kinesis-to-opensearch lambda function
 
 To trigger new releases, add and upload a new versioning tag (This is a 100% manual step; no automation is intended to do this particular step).
 
-```
+```bash
 # Example
 git tag 1.0.0
 git push origin 1.0.0
