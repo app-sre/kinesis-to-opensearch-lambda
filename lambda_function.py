@@ -95,8 +95,7 @@ def _send_to_splunk(events, splunk_hec_url, splunk_hec_token):
 def splunk_handler(processed_records, context):
     secret = get_secret(os.environ["secret_name"])
     splunk_disabled = secret.get("splunk_disabled", False)
-    if splunk_disabled:
-        print("Splunk sending is disabled. Exiting splunk_handler.")
+    if splunk_disabled and str(splunk_disabled).lower() == "true":
         return
     # splunk HEC configuration
     splunk_hec_url = secret["splunk_hec_url"]
