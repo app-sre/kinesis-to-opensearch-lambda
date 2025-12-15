@@ -44,7 +44,6 @@ def _process_kinesis_record(record):
         message.pop("ip")
     return message
 
-
 def elasticsearch_handler(processed_records, context):
     es_host = os.environ["es_endpoint"]
     elastic_search_secret = os.environ["secret_name"]
@@ -79,7 +78,6 @@ def elasticsearch_handler(processed_records, context):
     total = len(processed_records)
     print(f"Successfully processed {success}/{total} items for opensearch")
 
-
 def _send_to_splunk(events, splunk_hec_url, splunk_hec_token):
     try:
         response = requests.post(
@@ -96,6 +94,10 @@ def _send_to_splunk(events, splunk_hec_url, splunk_hec_token):
 
 def splunk_handler(processed_records, context):
     secret = get_secret(os.environ["secret_name"])
+    splunk_disabled = secret.get("splunk_disabled", False)
+    if splunk_disabled:
+        print("Splunk sending is disabled. Exiting splunk_handler.")
+        return
     # splunk HEC configuration
     splunk_hec_url = secret["splunk_hec_url"]
     splunk_hec_token = secret["splunk_hec_token"]
