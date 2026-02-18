@@ -12,6 +12,11 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 region = os.environ["AWS_REGION"]
+
+EXTENDED_FIELDS = {
+    "request_url", "http_method", "performer_username", "performer_email",
+    "performer_kind", "auth_type", "user_agent", "request_id", "x_forwarded_for"
+}
 type = "_doc"
 headers = {"Content-Type": "application/json"}
 session = boto3.session.Session()
@@ -43,6 +48,10 @@ def _process_kinesis_record(record):
     if "ip" in message and not message["ip"]:
         message.pop("ip")
     return message
+
+def _strip_extended_fields(record):
+    """Remove extended logging fields for ES to keep logs minimal."""
+    return {k: v for k, v in record.items() if k not in EXTENDED_FIELDS}
 
 def elasticsearch_handler(processed_records, context):
     es_host = os.environ["es_endpoint"]
@@ -130,5 +139,10 @@ def splunk_handler(processed_records, context):
 
 def handler(event, context):
     processed_records = [_process_kinesis_record(r) for r in event["Records"]]
-    elasticsearch_handler(processed_records,context)
-    splunk_handler(processed_records,context)
+
+    # Minimal logs to ES (strip extended fields)
+    es_records = [_strip_extended_fields(r) for r in processed_records]
+    elasticsearch_handler(es_records, context)
+
+    # Full logs with extended fields to Splunk
+    splunk_handler(processed_records, context)
