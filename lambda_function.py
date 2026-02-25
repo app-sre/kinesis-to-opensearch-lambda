@@ -83,11 +83,23 @@ def elasticsearch_handler(processed_records, client):
         action = {"_index": index, "_id":  message["random_id"], "_source": message}
         actions.append(action)
 
-    success, errors = helpers.bulk(client, actions, max_retries=3, raise_on_error=False)
-    if errors:
-        logger.error(errors)
+    success_count = 0
+    # parallel_bulk handles chunking internally (default chunk_size=500)
+    for success, info in helpers.parallel_bulk(
+        client,
+        actions,
+        thread_count=4,
+        chunk_size=500,
+        max_retries=3,
+        raise_on_error=False
+    ):
+        if success:
+            success_count += 1
+        else:
+            logger.error(info)
+
     total = len(processed_records)
-    print(f"Successfully processed {success}/{total} items for opensearch")
+    print(f"Successfully processed {success_count}/{total} items for opensearch")
 
 def _send_to_splunk(events, splunk_hec_url, session):
     try:
