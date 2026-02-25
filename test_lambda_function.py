@@ -4,10 +4,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from lambda_function import (
-    _strip_extended_fields,
+    _filter_for_es,
     _process_kinesis_record,
     handler,
-    EXTENDED_FIELDS,
+    ES_ALLOWED_FIELDS,
 )
 
 
@@ -21,13 +21,18 @@ def mock_env(monkeypatch):
 
 
 @pytest.fixture
-def sample_record_with_extended_fields():
-    """Sample log record containing extended fields."""
+def sample_full_record():
+    """Sample full log record with all fields (as sent to Splunk)."""
     return {
         "datetime": "2026-02-18T10:30:00",
+        "@timestamp": "2026-02-18T10:30:00",
         "random_id": "abc123",
-        "message": "User logged in",
-        "level": "INFO",
+        "kind_id": 5,
+        "account_id": 12345,
+        "performer_id": 67890,
+        "repository_id": 11111,
+        "ip": "192.168.1.1",
+        "metadata": {"oauth_token_id": 999},
         "request_url": "/api/login",
         "http_method": "POST",
         "performer_username": "john_doe",
@@ -36,18 +41,23 @@ def sample_record_with_extended_fields():
         "auth_type": "oauth",
         "user_agent": "Mozilla/5.0",
         "request_id": "req-456",
-        "x_forwarded_for": "192.168.1.1",
+        "x_forwarded_for": "10.0.0.1",
     }
 
 
 @pytest.fixture
-def sample_record_minimal():
-    """Sample log record without extended fields."""
+def sample_es_record():
+    """Sample record with only ES allowed fields."""
     return {
         "datetime": "2026-02-18T10:30:00",
+        "@timestamp": "2026-02-18T10:30:00",
         "random_id": "abc123",
-        "message": "User logged in",
-        "level": "INFO",
+        "kind_id": 5,
+        "account_id": 12345,
+        "performer_id": 67890,
+        "repository_id": 11111,
+        "ip": "192.168.1.1",
+        "metadata": {"oauth_token_id": 999},
     }
 
 
@@ -57,61 +67,75 @@ def create_kinesis_record(data: dict) -> dict:
     return {"kinesis": {"data": encoded}}
 
 
-class TestStripExtendedFields:
-    """Tests for _strip_extended_fields function."""
+class TestFilterForEs:
+    """Tests for _filter_for_es function."""
 
-    def test_strips_all_extended_fields(self, sample_record_with_extended_fields):
-        result = _strip_extended_fields(sample_record_with_extended_fields)
+    def test_keeps_only_allowed_fields(self, sample_full_record):
+        result = _filter_for_es(sample_full_record)
 
-        for field in EXTENDED_FIELDS:
+        for field in ES_ALLOWED_FIELDS:
+            if field in sample_full_record:
+                assert field in result
+
+        disallowed = {"request_url", "http_method", "performer_username", 
+                      "performer_email", "performer_kind", "auth_type", 
+                      "user_agent", "request_id", "x_forwarded_for"}
+        for field in disallowed:
             assert field not in result
 
-    def test_preserves_non_extended_fields(self, sample_record_with_extended_fields):
-        result = _strip_extended_fields(sample_record_with_extended_fields)
+    def test_preserves_all_es_fields(self, sample_full_record):
+        result = _filter_for_es(sample_full_record)
 
         assert result["datetime"] == "2026-02-18T10:30:00"
         assert result["random_id"] == "abc123"
-        assert result["message"] == "User logged in"
-        assert result["level"] == "INFO"
+        assert result["kind_id"] == 5
+        assert result["account_id"] == 12345
+        assert result["performer_id"] == 67890
+        assert result["repository_id"] == 11111
+        assert result["ip"] == "192.168.1.1"
+        assert result["metadata"] == {"oauth_token_id": 999}
 
-    def test_returns_same_record_when_no_extended_fields(self, sample_record_minimal):
-        result = _strip_extended_fields(sample_record_minimal)
+    def test_returns_only_allowed_fields_from_es_record(self, sample_es_record):
+        result = _filter_for_es(sample_es_record)
 
-        assert result == sample_record_minimal
+        assert result == sample_es_record
 
     def test_returns_empty_dict_for_empty_input(self):
-        result = _strip_extended_fields({})
+        result = _filter_for_es({})
 
         assert result == {}
 
-    def test_handles_partial_extended_fields(self):
+    def test_filters_out_non_allowed_fields(self):
         record = {
             "datetime": "2026-02-18T10:30:00",
             "random_id": "abc123",
             "request_url": "/api/test",
             "user_agent": "curl/7.0",
+            "some_other_field": "value",
         }
 
-        result = _strip_extended_fields(record)
+        result = _filter_for_es(record)
 
         assert "datetime" in result
         assert "random_id" in result
         assert "request_url" not in result
         assert "user_agent" not in result
+        assert "some_other_field" not in result
 
 
 class TestProcessKinesisRecord:
     """Tests for _process_kinesis_record function."""
 
-    def test_decodes_base64_kinesis_data(self, sample_record_minimal):
-        kinesis_record = create_kinesis_record(sample_record_minimal)
+    def test_decodes_base64_kinesis_data(self, sample_es_record):
+        kinesis_record = create_kinesis_record(sample_es_record)
         result = _process_kinesis_record(kinesis_record)
 
-        assert result["message"] == "User logged in"
         assert result["random_id"] == "abc123"
+        assert result["kind_id"] == 5
 
-    def test_adds_timestamp_field(self, sample_record_minimal):
-        kinesis_record = create_kinesis_record(sample_record_minimal)
+    def test_adds_timestamp_field(self):
+        record = {"datetime": "2026-02-18T10:30:00", "random_id": "abc123"}
+        kinesis_record = create_kinesis_record(record)
         result = _process_kinesis_record(kinesis_record)
 
         assert "@timestamp" in result
@@ -141,25 +165,31 @@ class TestProcessKinesisRecord:
 
 
 class TestHandler:
-    """Tests for handler function - verifies ES gets stripped records, Splunk gets full records."""
+    """Tests for handler function - verifies ES gets filtered records, Splunk gets full records."""
 
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
-    def test_es_receives_stripped_records(
+    def test_es_receives_only_allowed_fields(
         self,
         mock_es_handler,
         mock_splunk_handler,
-        sample_record_with_extended_fields,
+        sample_full_record,
     ):
-        event = {"Records": [create_kinesis_record(sample_record_with_extended_fields)]}
+        event = {"Records": [create_kinesis_record(sample_full_record)]}
         context = MagicMock()
 
         handler(event, context)
 
         es_records = mock_es_handler.call_args[0][0]
         assert len(es_records) == 1
-        for field in EXTENDED_FIELDS:
-            assert field not in es_records[0]
+        
+        es_record = es_records[0]
+        for field in es_record:
+            assert field in ES_ALLOWED_FIELDS
+        
+        assert "request_url" not in es_record
+        assert "http_method" not in es_record
+        assert "performer_username" not in es_record
 
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
@@ -167,9 +197,9 @@ class TestHandler:
         self,
         mock_es_handler,
         mock_splunk_handler,
-        sample_record_with_extended_fields,
+        sample_full_record,
     ):
-        event = {"Records": [create_kinesis_record(sample_record_with_extended_fields)]}
+        event = {"Records": [create_kinesis_record(sample_full_record)]}
         context = MagicMock()
 
         handler(event, context)
@@ -179,6 +209,8 @@ class TestHandler:
         assert "request_url" in splunk_records[0]
         assert "http_method" in splunk_records[0]
         assert "performer_username" in splunk_records[0]
+        assert "random_id" in splunk_records[0]
+        assert "kind_id" in splunk_records[0]
 
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
@@ -188,9 +220,9 @@ class TestHandler:
         mock_splunk_handler,
     ):
         records = [
-            {"datetime": "2026-02-18T10:30:00", "random_id": "1", "request_url": "/a"},
-            {"datetime": "2026-02-18T10:31:00", "random_id": "2", "http_method": "GET"},
-            {"datetime": "2026-02-18T10:32:00", "random_id": "3", "user_agent": "curl"},
+            {"datetime": "2026-02-18T10:30:00", "random_id": "1", "kind_id": 1, "request_url": "/a"},
+            {"datetime": "2026-02-18T10:31:00", "random_id": "2", "kind_id": 2, "http_method": "GET"},
+            {"datetime": "2026-02-18T10:32:00", "random_id": "3", "kind_id": 3, "user_agent": "curl"},
         ]
         event = {"Records": [create_kinesis_record(r) for r in records]}
         context = MagicMock()
@@ -204,8 +236,8 @@ class TestHandler:
         assert len(splunk_records) == 3
 
         for es_record in es_records:
-            for field in EXTENDED_FIELDS:
-                assert field not in es_record
+            for field in es_record:
+                assert field in ES_ALLOWED_FIELDS
 
         assert "request_url" in splunk_records[0]
         assert "http_method" in splunk_records[1]
@@ -217,9 +249,9 @@ class TestHandler:
         self,
         mock_es_handler,
         mock_splunk_handler,
-        sample_record_minimal,
+        sample_es_record,
     ):
-        event = {"Records": [create_kinesis_record(sample_record_minimal)]}
+        event = {"Records": [create_kinesis_record(sample_es_record)]}
         context = MagicMock()
 
         handler(event, context)
