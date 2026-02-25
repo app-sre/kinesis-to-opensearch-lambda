@@ -20,17 +20,6 @@ def mock_env(monkeypatch):
     monkeypatch.setenv("index_prefix", "logs-")
 
 
-@pytest.fixture(autouse=True)
-def reset_global_clients():
-    """Reset global client variables between tests."""
-    import lambda_function
-    lambda_function.opensearch_client = None
-    lambda_function.splunk_session = None
-    yield
-    lambda_function.opensearch_client = None
-    lambda_function.splunk_session = None
-
-
 @pytest.fixture
 def sample_record_with_extended_fields():
     """Sample log record containing extended fields."""
@@ -154,31 +143,14 @@ class TestProcessKinesisRecord:
 class TestHandler:
     """Tests for handler function - verifies ES gets stripped records, Splunk gets full records."""
 
-    @patch("lambda_function.requests.Session")
-    @patch("lambda_function._build_opensearch_client")
-    @patch("lambda_function.get_secret")
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
     def test_es_receives_stripped_records(
         self,
         mock_es_handler,
         mock_splunk_handler,
-        mock_get_secret,
-        mock_build_client,
-        mock_session,
         sample_record_with_extended_fields,
     ):
-        mock_get_secret.return_value = {
-            "master_user_name": "test_user",
-            "master_user_password": "test_pass",
-            "splunk_hec_url": "https://splunk.test",
-            "splunk_hec_token": "test-token",
-            "splunk_index": "test-index",
-            "splunk_disabled": False,
-        }
-        mock_build_client.return_value = MagicMock()
-        mock_session.return_value = MagicMock()
-
         event = {"Records": [create_kinesis_record(sample_record_with_extended_fields)]}
         context = MagicMock()
 
@@ -189,31 +161,14 @@ class TestHandler:
         for field in EXTENDED_FIELDS:
             assert field not in es_records[0]
 
-    @patch("lambda_function.requests.Session")
-    @patch("lambda_function._build_opensearch_client")
-    @patch("lambda_function.get_secret")
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
     def test_splunk_receives_full_records(
         self,
         mock_es_handler,
         mock_splunk_handler,
-        mock_get_secret,
-        mock_build_client,
-        mock_session,
         sample_record_with_extended_fields,
     ):
-        mock_get_secret.return_value = {
-            "master_user_name": "test_user",
-            "master_user_password": "test_pass",
-            "splunk_hec_url": "https://splunk.test",
-            "splunk_hec_token": "test-token",
-            "splunk_index": "test-index",
-            "splunk_disabled": False,
-        }
-        mock_build_client.return_value = MagicMock()
-        mock_session.return_value = MagicMock()
-
         event = {"Records": [create_kinesis_record(sample_record_with_extended_fields)]}
         context = MagicMock()
 
@@ -225,30 +180,13 @@ class TestHandler:
         assert "http_method" in splunk_records[0]
         assert "performer_username" in splunk_records[0]
 
-    @patch("lambda_function.requests.Session")
-    @patch("lambda_function._build_opensearch_client")
-    @patch("lambda_function.get_secret")
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
     def test_handler_processes_multiple_records(
         self,
         mock_es_handler,
         mock_splunk_handler,
-        mock_get_secret,
-        mock_build_client,
-        mock_session,
     ):
-        mock_get_secret.return_value = {
-            "master_user_name": "test_user",
-            "master_user_password": "test_pass",
-            "splunk_hec_url": "https://splunk.test",
-            "splunk_hec_token": "test-token",
-            "splunk_index": "test-index",
-            "splunk_disabled": False,
-        }
-        mock_build_client.return_value = MagicMock()
-        mock_session.return_value = MagicMock()
-
         records = [
             {"datetime": "2026-02-18T10:30:00", "random_id": "1", "request_url": "/a"},
             {"datetime": "2026-02-18T10:31:00", "random_id": "2", "http_method": "GET"},
@@ -273,31 +211,14 @@ class TestHandler:
         assert "http_method" in splunk_records[1]
         assert "user_agent" in splunk_records[2]
 
-    @patch("lambda_function.requests.Session")
-    @patch("lambda_function._build_opensearch_client")
-    @patch("lambda_function.get_secret")
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
     def test_es_and_splunk_both_called(
         self,
         mock_es_handler,
         mock_splunk_handler,
-        mock_get_secret,
-        mock_build_client,
-        mock_session,
         sample_record_minimal,
     ):
-        mock_get_secret.return_value = {
-            "master_user_name": "test_user",
-            "master_user_password": "test_pass",
-            "splunk_hec_url": "https://splunk.test",
-            "splunk_hec_token": "test-token",
-            "splunk_index": "test-index",
-            "splunk_disabled": False,
-        }
-        mock_build_client.return_value = MagicMock()
-        mock_session.return_value = MagicMock()
-
         event = {"Records": [create_kinesis_record(sample_record_minimal)]}
         context = MagicMock()
 
