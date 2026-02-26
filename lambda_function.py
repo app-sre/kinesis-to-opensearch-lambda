@@ -23,6 +23,7 @@ session = boto3.session.Session()
 
 # Global reusable clients for warm Lambda container reuse
 opensearch_client = None
+splunk_session = None
 
 
 def get_secret(aws_secret_value):
@@ -137,7 +138,7 @@ def splunk_handler(processed_records, session, splunk_hec_url, splunk_index):
     print(f"Successfully processed {success_count}/{total} items to Splunk")
 
 def handler(event, context):
-    global opensearch_client
+    global opensearch_client, splunk_session
 
     # Get secret once for reuse
     secret = get_secret(os.environ["secret_name"])
@@ -147,10 +148,11 @@ def handler(event, context):
         es_endpoint = os.environ["es_endpoint"]
         opensearch_client = _build_opensearch_client(es_endpoint, secret)
 
-    # Initialize Splunk session (fresh per invocation to avoid stale connections)
-    splunk_session = requests.Session()
-    splunk_hec_token = secret["splunk_hec_token"]
-    splunk_session.headers.update({'Authorization': f'Splunk {splunk_hec_token}'})
+    # Initialize Splunk session (reuse if already exists in warm container)
+    if splunk_session is None:
+        splunk_session = requests.Session()
+        splunk_hec_token = secret["splunk_hec_token"]
+        splunk_session.headers.update({'Authorization': f'Splunk {splunk_hec_token}'})
 
     processed_records = [_process_kinesis_record(r) for r in event["Records"]]
 

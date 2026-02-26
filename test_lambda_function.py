@@ -25,8 +25,10 @@ def reset_global_clients():
     """Reset global client variables before and after each test."""
     import lambda_function
     lambda_function.opensearch_client = None
+    lambda_function.splunk_session = None
     yield
     lambda_function.opensearch_client = None
+    lambda_function.splunk_session = None
 
 
 @pytest.fixture
