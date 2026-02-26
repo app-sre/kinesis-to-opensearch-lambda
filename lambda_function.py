@@ -11,7 +11,7 @@ from opensearchpy import OpenSearch, helpers, AWSV4SignerAuth
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-region = os.environ.get("AWS_REGION", "us-east-1")
+region = os.environ["AWS_REGION"]
 
 ES_ALLOWED_FIELDS = {
     "random_id", "kind_id", "account_id", "performer_id",
@@ -20,10 +20,6 @@ ES_ALLOWED_FIELDS = {
 type = "_doc"
 headers = {"Content-Type": "application/json"}
 session = boto3.session.Session()
-
-# Global reusable clients for warm Lambda container reuse
-opensearch_client = None
-splunk_session = None
 
 
 def get_secret(aws_secret_value):
@@ -44,24 +40,6 @@ def get_secret(aws_secret_value):
 
     return json.loads(secret)
 
-def _build_opensearch_client(es_endpoint, secret):
-    """Build an OpenSearch client with provided endpoint and secret."""
-    elastic_search_secret = os.environ["secret_name"]
-
-    if elastic_search_secret:
-        auth = (secret["master_user_name"], secret["master_user_password"])
-    else:
-        credentials = session.get_credentials()
-        auth = AWSV4SignerAuth(credentials, region)
-
-    return OpenSearch(
-        hosts=[{"host": es_endpoint, "port": 443}],
-        http_auth=auth,
-        http_compress=True,
-        use_ssl=True,
-        verify_certs=True,
-    )
-
 def _process_kinesis_record(record):
     # Kinesis data is base64-encoded, so decode here
     message = json.loads(base64.b64decode(record["kinesis"]["data"]))
@@ -75,17 +53,32 @@ def _filter_for_es(record):
     """Keep only allowed fields for ES to minimize log size."""
     return {k: v for k, v in record.items() if k in ES_ALLOWED_FIELDS}
 
-def elasticsearch_handler(processed_records, client):
-    """Send records to OpenSearch using pre-built client."""
+def elasticsearch_handler(processed_records, context):
+    es_host = os.environ["es_endpoint"]
+    elastic_search_secret = os.environ["secret_name"]
     es_index_prefix = os.environ["index_prefix"]
+
+    if elastic_search_secret:
+        secret = get_secret(elastic_search_secret)
+        auth = (secret["master_user_name"], secret["master_user_password"])
+    else:
+        credentials = session.get_credentials()
+        auth = AWSV4SignerAuth(credentials, region)
+
+    client = OpenSearch(
+        hosts=[{"host": es_host, "port": 443}],
+        http_auth=auth,
+        http_compress=True,
+        use_ssl=True,
+        verify_certs=True,
+    )
 
     actions = []
     for message in processed_records:
         if message is None:
             continue
         index = es_index_prefix + str(datetime.fromisoformat(message["datetime"]).date())
-        filtered = _filter_for_es(message)
-        action = {"_index": index, "_id":  message["random_id"], "_source": filtered}
+        action = {"_index": index, "_id":  message["random_id"], "_source": message}
         actions.append(action)
 
     success, errors = helpers.bulk(client, actions, max_retries=3, raise_on_error=False)
@@ -94,11 +87,11 @@ def elasticsearch_handler(processed_records, client):
     total = len(processed_records)
     print(f"Successfully processed {success}/{total} items for opensearch")
 
-def _send_to_splunk(events, splunk_hec_url, session):
-    """Send events to Splunk using a pre-configured session."""
+def _send_to_splunk(events, splunk_hec_url, splunk_hec_token):
     try:
-        response = session.post(
+        response = requests.post(
             splunk_hec_url,
+            headers={'Authorization': f'Splunk {splunk_hec_token}'},
             json=events,
             timeout=12
         )
@@ -108,8 +101,15 @@ def _send_to_splunk(events, splunk_hec_url, session):
         logger.error(str(e))
         return 0
 
-def splunk_handler(processed_records, session, splunk_hec_url, splunk_index):
-    """Send records to Splunk using a pre-configured session."""
+def splunk_handler(processed_records, context):
+    secret = get_secret(os.environ["secret_name"])
+    splunk_disabled = secret.get("splunk_disabled", False)
+    if splunk_disabled and str(splunk_disabled).lower() == "true":
+        return
+    # splunk HEC configuration
+    splunk_hec_url = secret["splunk_hec_url"]
+    splunk_hec_token = secret["splunk_hec_token"]
+    splunk_index = secret["splunk_index"]
     success_count = 0
     events = []
     max_batch_size = 500
@@ -126,42 +126,23 @@ def splunk_handler(processed_records, session, splunk_hec_url, splunk_index):
         events.append(event)
         # if the number of events reaches the max batch size, send them to Splunk
         if len(events) >= max_batch_size:
-            sent = _send_to_splunk(events, splunk_hec_url, session)
+            sent = _send_to_splunk(events, splunk_hec_url, splunk_hec_token)
             success_count += sent
             events = []
     # Send remaining events
     if events:
-        sent = _send_to_splunk(events, splunk_hec_url, session)
+        sent = _send_to_splunk(events, splunk_hec_url, splunk_hec_token)
         success_count += sent
 
     total = len(processed_records)
     print(f"Successfully processed {success_count}/{total} items to Splunk")
 
 def handler(event, context):
-    global opensearch_client, splunk_session
-
-    # Get secret once for reuse
-    secret = get_secret(os.environ["secret_name"])
-
-    # Initialize OpenSearch client (reuse if already exists in warm container)
-    if opensearch_client is None:
-        es_endpoint = os.environ["es_endpoint"]
-        opensearch_client = _build_opensearch_client(es_endpoint, secret)
-
-    # Initialize Splunk session (reuse if already exists in warm container)
-    if splunk_session is None:
-        splunk_session = requests.Session()
-        splunk_hec_token = secret["splunk_hec_token"]
-        splunk_session.headers.update({'Authorization': f'Splunk {splunk_hec_token}'})
-
     processed_records = [_process_kinesis_record(r) for r in event["Records"]]
 
     # Minimal logs to ES (only allowed fields)
-    elasticsearch_handler(processed_records, opensearch_client)
+    es_records = [_filter_for_es(r) for r in processed_records]
+    elasticsearch_handler(es_records, context)
 
-    # Full logs with extended fields to Splunk (skip if disabled)
-    splunk_disabled = secret.get("splunk_disabled", False)
-    if not (splunk_disabled and str(splunk_disabled).lower() == "true"):
-        splunk_hec_url = secret["splunk_hec_url"]
-        splunk_index = secret["splunk_index"]
-        splunk_handler(processed_records, splunk_session, splunk_hec_url, splunk_index)
+    # Full logs with extended fields to Splunk
+    splunk_handler(processed_records, context)
