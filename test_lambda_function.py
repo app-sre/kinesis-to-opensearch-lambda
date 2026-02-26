@@ -20,6 +20,17 @@ def mock_env(monkeypatch):
     monkeypatch.setenv("index_prefix", "logs-")
 
 
+@pytest.fixture(autouse=True)
+def reset_global_clients():
+    """Reset global client variables before and after each test."""
+    import lambda_function
+    lambda_function.opensearch_client = None
+    lambda_function.splunk_session = None
+    yield
+    lambda_function.opensearch_client = None
+    lambda_function.splunk_session = None
+
+
 @pytest.fixture
 def sample_full_record():
     """Sample full log record with all fields (as sent to Splunk)."""
@@ -169,12 +180,28 @@ class TestHandler:
 
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
+    @patch("lambda_function.requests.Session")
+    @patch("lambda_function._build_opensearch_client")
+    @patch("lambda_function.get_secret")
     def test_es_receives_only_allowed_fields(
         self,
+        mock_get_secret,
+        mock_build_client,
+        mock_session_class,
         mock_es_handler,
         mock_splunk_handler,
         sample_full_record,
     ):
+        mock_get_secret.return_value = {
+            "master_user_name": "test",
+            "master_user_password": "test",
+            "splunk_hec_token": "test-token",
+            "splunk_hec_url": "http://test.com",
+            "splunk_index": "test-index",
+        }
+        mock_build_client.return_value = MagicMock()
+        mock_session_class.return_value = MagicMock()
+
         event = {"Records": [create_kinesis_record(sample_full_record)]}
         context = MagicMock()
 
@@ -182,23 +209,40 @@ class TestHandler:
 
         es_records = mock_es_handler.call_args[0][0]
         assert len(es_records) == 1
-        
+
+        # elasticsearch_handler now receives unfiltered records
         es_record = es_records[0]
-        for field in es_record:
-            assert field in ES_ALLOWED_FIELDS
-        
-        assert "request_url" not in es_record
-        assert "http_method" not in es_record
-        assert "performer_username" not in es_record
+        # Verify it receives the full record (including non-ES fields)
+        assert "random_id" in es_record
+        assert "datetime" in es_record
+        assert "request_url" in es_record
+        assert "http_method" in es_record
+        assert "performer_username" in es_record
 
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
+    @patch("lambda_function.requests.Session")
+    @patch("lambda_function._build_opensearch_client")
+    @patch("lambda_function.get_secret")
     def test_splunk_receives_full_records(
         self,
+        mock_get_secret,
+        mock_build_client,
+        mock_session_class,
         mock_es_handler,
         mock_splunk_handler,
         sample_full_record,
     ):
+        mock_get_secret.return_value = {
+            "master_user_name": "test",
+            "master_user_password": "test",
+            "splunk_hec_token": "test-token",
+            "splunk_hec_url": "http://test.com",
+            "splunk_index": "test-index",
+        }
+        mock_build_client.return_value = MagicMock()
+        mock_session_class.return_value = MagicMock()
+
         event = {"Records": [create_kinesis_record(sample_full_record)]}
         context = MagicMock()
 
@@ -214,11 +258,27 @@ class TestHandler:
 
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
+    @patch("lambda_function.requests.Session")
+    @patch("lambda_function._build_opensearch_client")
+    @patch("lambda_function.get_secret")
     def test_handler_processes_multiple_records(
         self,
+        mock_get_secret,
+        mock_build_client,
+        mock_session_class,
         mock_es_handler,
         mock_splunk_handler,
     ):
+        mock_get_secret.return_value = {
+            "master_user_name": "test",
+            "master_user_password": "test",
+            "splunk_hec_token": "test-token",
+            "splunk_hec_url": "http://test.com",
+            "splunk_index": "test-index",
+        }
+        mock_build_client.return_value = MagicMock()
+        mock_session_class.return_value = MagicMock()
+
         records = [
             {"datetime": "2026-02-18T10:30:00", "random_id": "1", "kind_id": 1, "request_url": "/a"},
             {"datetime": "2026-02-18T10:31:00", "random_id": "2", "kind_id": 2, "http_method": "GET"},
@@ -235,9 +295,11 @@ class TestHandler:
         assert len(es_records) == 3
         assert len(splunk_records) == 3
 
-        for es_record in es_records:
-            for field in es_record:
-                assert field in ES_ALLOWED_FIELDS
+        # elasticsearch_handler now receives unfiltered records (same as splunk_handler)
+        # Verify both handlers receive the full records
+        assert "request_url" in es_records[0]
+        assert "http_method" in es_records[1]
+        assert "user_agent" in es_records[2]
 
         assert "request_url" in splunk_records[0]
         assert "http_method" in splunk_records[1]
@@ -245,12 +307,28 @@ class TestHandler:
 
     @patch("lambda_function.splunk_handler")
     @patch("lambda_function.elasticsearch_handler")
+    @patch("lambda_function.requests.Session")
+    @patch("lambda_function._build_opensearch_client")
+    @patch("lambda_function.get_secret")
     def test_es_and_splunk_both_called(
         self,
+        mock_get_secret,
+        mock_build_client,
+        mock_session_class,
         mock_es_handler,
         mock_splunk_handler,
         sample_es_record,
     ):
+        mock_get_secret.return_value = {
+            "master_user_name": "test",
+            "master_user_password": "test",
+            "splunk_hec_token": "test-token",
+            "splunk_hec_url": "http://test.com",
+            "splunk_index": "test-index",
+        }
+        mock_build_client.return_value = MagicMock()
+        mock_session_class.return_value = MagicMock()
+
         event = {"Records": [create_kinesis_record(sample_es_record)]}
         context = MagicMock()
 
